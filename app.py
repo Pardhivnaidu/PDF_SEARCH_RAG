@@ -24,9 +24,9 @@ if API_KEY is None:
 
 import hashlib
 
-st.write("Key loaded:", bool(api_key))
-st.write("Key length:", len(api_key))
-st.write("Key fingerprint:",hashlib.sha256(api_key.encode()).hexdigest()[:12])
+st.write("Key loaded:", bool(API_KEY))
+st.write("Key length:", len(API_KEY))
+st.write("Key fingerprint:",hashlib.sha256(API_KEY.encode()).hexdigest()[:12])
 
 
 
