@@ -20,6 +20,19 @@ if API_KEY is None:
     st.stop()
 
 
+
+
+import hashlib
+
+st.write("Key loaded:", bool(api_key))
+st.write("Key length:", len(api_key))
+st.write("Key fingerprint:",hashlib.sha256(api_key.encode()).hexdigest()[:12])
+
+
+
+
+
+
 @st.cache_resource(show_spinner=False)
 def load_vector_store(pdf_path, api_key):
     return create_vector_store(pdf_path, api_key)
