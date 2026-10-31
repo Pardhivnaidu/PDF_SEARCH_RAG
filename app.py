@@ -1,98 +1,143 @@
+
 import os
+import hashlib
 import tempfile
 import streamlit as st
 
-from rag_backend import create_vector_store, get_answer
+from dotenv import load_dotenv
 
+
+#load environment variables
+load_dotenv()
+
+API_KEY = os.getenv("GOOGLE_API_KEY")
+
+
+#page configuration
 st.set_page_config(
     page_title="PDF Question Answering",
     page_icon="📄"
 )
 
-st.title("📄 PDF Question Answering")
-st.write("Upload a PDF and ask questions about it.")
 
-# Read API key from environment variable (Render)
-API_KEY = os.getenv("GOOGLE_API_KEY")
-
-if API_KEY is None:
-    st.error("GOOGLE_API_KEY environment variable is not set.")
+#check api key
+if not API_KEY:
+    st.error("GOOGLE_API_KEY not found in .env file")
     st.stop()
 
 
+#import backend
+from rag_backend import create_vector_store, get_answer
 
 
-import hashlib
+#title
+st.title("📄 PDF Question Answering")
 
-st.write("Key loaded:", bool(API_KEY))
-st.write("Key length:", len(API_KEY))
-st.write("Key fingerprint:",hashlib.sha256(API_KEY.encode()).hexdigest()[:12])
-
+st.write("Upload a PDF and ask questions about it.")
 
 
-
-
-
-@st.cache_resource(show_spinner=False)
-def load_vector_store(pdf_path, api_key):
-    return create_vector_store(pdf_path, api_key)
-
-
+#upload pdf
 uploaded_pdf = st.file_uploader(
     "Upload PDF",
     type=["pdf"]
 )
 
+
 if uploaded_pdf:
 
+    #read uploaded pdf
+    pdf_bytes = uploaded_pdf.getvalue()
+
+    #create unique pdf hash
+    pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()[:16]
+
+    collection_name = "pdf_" + pdf_hash
+
+
+    #check if a new pdf is uploaded
     if (
         "vector_store" not in st.session_state
-        or st.session_state.get("pdf_name") != uploaded_pdf.name
+        or st.session_state.get("pdf_hash") != pdf_hash
     ):
 
+        #temporary pdf file
         with tempfile.NamedTemporaryFile(
             delete=False,
             suffix=".pdf"
         ) as tmp:
 
-            tmp.write(uploaded_pdf.read())
+            tmp.write(pdf_bytes)
             pdf_path = tmp.name
 
-        with st.spinner("Reading PDF and creating embeddings..."):
 
-            vector_store = load_vector_store(
-                pdf_path,
-                API_KEY
-            )
+        try:
 
-            st.session_state.vector_store = vector_store
-            st.session_state.pdf_name = uploaded_pdf.name
+            #create vector store
+            with st.spinner("Reading PDF and creating embeddings..."):
 
-        st.success("PDF processed successfully!")
+                vector_store = create_vector_store(
+                    pdf_path,
+                    collection_name
+                )
 
-question = st.text_input(
-    "Ask a question"
-)
+                st.session_state.vector_store = vector_store
+                st.session_state.pdf_hash = pdf_hash
+                st.session_state.pdf_name = uploaded_pdf.name
 
-if st.button("Get Answer"):
+            st.success("PDF processed successfully!")
 
-    if "vector_store" not in st.session_state:
+        except Exception as e:
 
-        st.warning("Please upload a PDF first.")
+            st.error(f"Error processing PDF: {str(e)}")
 
-    elif question.strip() == "":
+            #remove old vector store state after failure
+            st.session_state.pop("vector_store", None)
+            st.session_state.pop("pdf_hash", None)
+            st.session_state.pop("pdf_name", None)
 
-        st.warning("Please enter a question.")
+        finally:
 
-    else:
+            #remove temporary file
+            if os.path.exists(pdf_path):
+                os.remove(pdf_path)
 
-        with st.spinner("Generating answer..."):
 
-            answer = get_answer(
-                st.session_state.vector_store,
-                question,
-                API_KEY
-            )
+    #display uploaded file
+    if st.session_state.get("pdf_hash") == pdf_hash:
 
-        st.markdown("### Answer")
-        st.write(answer)
+        st.write("Current PDF:", uploaded_pdf.name)
+
+
+        #question input
+        question = st.text_input(
+            "Enter your question"
+        )
+
+
+        #get answer
+        if st.button("Get Answer"):
+
+            if question.strip() == "":
+
+                st.warning("Please enter a question.")
+
+            else:
+
+                try:
+
+                    with st.spinner("Generating answer..."):
+
+                        answer = get_answer(
+                            st.session_state.vector_store,
+                            question
+                        )
+
+
+                    #display answer
+                    st.markdown("### Answer")
+
+                    st.write(answer)
+
+                except Exception as e:
+
+                    st.error(f"Error generating answer: {str(e)}")

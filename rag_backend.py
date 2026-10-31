@@ -1,40 +1,57 @@
-from google import genai
 
-from langchain_core.embeddings import Embeddings
+import os
+import chromadb
+
+from dotenv import load_dotenv
+
+#doc loading
 from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_community.vectorstores import FAISS
+
+#text splitting
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+#embedding and vector store
+from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_chroma import Chroma
+
+#prompt and output parser
+from langchain_core.prompts import PromptTemplate
+from langchain_core.output_parsers import StrOutputParser
 
 
-class GeminiEmbeddings(Embeddings):
+load_dotenv()
 
-    def __init__(self, api_key):
-        self.client = genai.Client(api_key=api_key)
+API_KEY = os.getenv("GOOGLE_API_KEY")
 
-    def embed_documents(self, texts):
-
-        response = self.client.models.embed_content(
-            model="models/gemini-embedding-001",
-            contents=texts
-        )
-
-        return [embedding.values for embedding in response.embeddings]
-
-    def embed_query(self, text):
-
-        response = self.client.models.embed_content(
-            model="models/gemini-embedding-001",
-            contents=text
-        )
-
-        return response.embeddings[0].values
+if not API_KEY:
+    raise ValueError("GOOGLE_API_KEY not found in .env file")
 
 
-def create_vector_store(pdf_path, api_key):
+#initialize embeddings
+embeddings = GoogleGenerativeAIEmbeddings(
+    model="models/gemini-embedding-001",
+    google_api_key=API_KEY
+)
 
+
+#initialize gen ai
+llm = ChatGoogleGenerativeAI(
+    model="gemini-3.8-flash",
+    google_api_key=API_KEY
+)
+
+#load pdf and create vector store
+def create_vector_store(pdf_path, collection_name):
+
+    #loader
     loader = PyPDFLoader(pdf_path)
+
     documents = loader.load()
 
+    print("number of pages : ", len(documents))
+
+
+    #split documents
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=300,
         chunk_overlap=50
@@ -42,62 +59,80 @@ def create_vector_store(pdf_path, api_key):
 
     chunks = splitter.split_documents(documents)
 
-    embedding_model = GeminiEmbeddings(api_key)
+    print("number of chunks : ", len(chunks))
 
-    vector_store = FAISS.from_documents(
-        chunks,
-        embedding_model
+
+    #remove old collection if it exists
+    client = chromadb.PersistentClient(path="./chroma_db")
+
+    try:
+        client.delete_collection(collection_name)
+    except Exception:
+        pass
+
+
+    #vector store
+    vectorstore = Chroma.from_documents(
+        documents=chunks,
+        embedding=embeddings,
+        persist_directory="./chroma_db",
+        collection_name=collection_name
     )
 
-    return vector_store
+    print("documents stored in chroma db")
+
+    return vectorstore
 
 
-def get_answer(vector_store, question, api_key):
+#convert vector store into retriever
+def get_answer(vectorstore, question):
 
-    retriever = vector_store.as_retriever(
+    retriever = vectorstore.as_retriever(
+        search_type="similarity",
         search_kwargs={"k": 3}
     )
 
-    docs = retriever.invoke(question)
 
-    if not docs:
+    #retrieve documents
+    retrieved_docs = retriever.invoke(question)
+
+    if not retrieved_docs:
         return "I don't know."
 
+
+    #create context
     context = "\n\n".join(
-        doc.page_content for doc in docs
+        doc.page_content for doc in retrieved_docs
     )
 
-    prompt = f"""
-You are a helpful PDF assistant.
 
-Answer ONLY using the provided context.
+    #prompt
+    prompt = PromptTemplate(
+        template="""You are a helpful PDF question answering AI assistant.
 
-If the answer is partially present,
-answer only what is supported by the context.
+        Answer from below context only.
+        If the answer is not present in the context, just say I don't know.
 
-If the answer cannot be found,
-reply exactly:
+        context = {context}
 
-I don't know.
+        question = {question}
+        """,
+        input_variables=["context", "question"]
+    )
 
-Do not make up facts.
 
-Context:
-{context}
+    #parser
+    parser = StrOutputParser()
 
-Question:
-{question}
-"""
 
-    client = genai.Client(api_key=api_key)
+    #chain
+    chain = prompt | llm | parser
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-3-flash-preview",
-            contents=prompt
-        )
 
-        return response.text
+    #generate answer
+    ans = chain.invoke({
+        "context": context,
+        "question": question
+    })
 
-    except Exception as e:
-        return f"Error: {str(e)}"
+    return ans

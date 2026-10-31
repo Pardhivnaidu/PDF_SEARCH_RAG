@@ -1,0 +1,17 @@
+
+#API keys
+.env
+
+#python cache
+__pycache__/
+*.pyc
+
+#chroma database
+chroma_db/
+
+#virtual env  ironment
+venv/
+.venv/
+
+#temporary files
+*.pdf
